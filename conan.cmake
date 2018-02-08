@@ -151,10 +151,12 @@ endfunction()
 
 
 function(conan_cmake_detect_gnu_libcxx result)
-    string(FIND ${CMAKE_CXX_FLAGS} "-stdlib=libc++" stdlib_flag_position)
-    if (NOT stdlib_flag_position EQUAL -1)
-        set(${result} libc++ PARENT_SCOPE)
-        return()
+    if (${CMAKE_CXX_FLAGS})
+        string(FIND ${CMAKE_CXX_FLAGS} "-stdlib=libc++" stdlib_flag_position)
+        if (NOT stdlib_flag_position EQUAL -1)
+            set(${result} libc++ PARENT_SCOPE)
+            return()
+        endif()
     endif()
     
     # Allow -D_GLIBCXX_USE_CXX11_ABI=ON/OFF as argument to cmake
