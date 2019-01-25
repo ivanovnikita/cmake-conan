@@ -15,13 +15,13 @@ def save(filename, content):
         handle.write(content)
 
 
-def run(cmd):
+def run(cmd, ignore_errors=False):
     retcode = os.system(cmd)
-    if retcode != 0:
+    if retcode != 0 and not ignore_errors:
         raise Exception("Command failed: %s" % cmd)
 
 if platform.system() == "Windows":
-    generator = '-G "Visual Studio 14"'
+    generator = '-G "Visual Studio 15"'
 else:
     generator = '-G "Unix Makefiles"'
 # TODO: Test Xcode
@@ -38,6 +38,7 @@ class CMakeConanTest(unittest.TestCase):
         folder = tempfile.mkdtemp(suffix="conan", dir=CONAN_TEST_FOLDER)
         self.old_env = dict(os.environ)
         os.environ.update({"CONAN_USER_HOME": folder})
+        run("conan remote add transit https://api.bintray.com/conan/conan/conan-transit")
 
     def tearDown(self):
         os.chdir(self.old_folder)
@@ -203,7 +204,9 @@ project(conan_wrapper CXX)
 include(conan.cmake)
 conan_cmake_run(CONANFILE conan/conanfile.py
                 BASIC_SETUP CMAKE_TARGETS
-                BUILD missing)
+                BUILD missing
+                NO_IMPORTS
+                INSTALL_ARGS --update)
 
 add_executable(main main.cpp)
 target_link_libraries(main CONAN_PKG::Hello)
@@ -217,6 +220,9 @@ class Pkg(ConanFile):
     generators = "cmake"
     # Defining the settings is necessary now to cache them
     settings = "os", "compiler", "arch", "build_type"
+
+    def imports(self):
+        raise Exception("BOOM!")
 """)
 
         os.makedirs("build")
@@ -269,9 +275,7 @@ class Pkg(ConanFile):
     def test_vs_toolset(self):
         if platform.system() != "Windows":
             return
-        content = """#set(CMAKE_CXX_COMPILER_WORKS 1)
-#set(CMAKE_CXX_ABI_COMPILED 1)
-message(STATUS "COMPILING-------")
+        content = """message(STATUS "COMPILING-------")
 cmake_minimum_required(VERSION 2.8)
 project(conan_wrapper CXX)
 
@@ -291,3 +295,209 @@ target_link_libraries(main ${CONAN_LIBS})
         run("cmake --build . --config Release")
         cmd = os.sep.join([".", "bin", "main"])
         run(cmd)
+
+    def test_vs_toolset_host_x64(self):
+        if platform.system() != "Windows":
+            return
+        content = """message(STATUS "COMPILING-------")
+cmake_minimum_required(VERSION 2.8)
+project(conan_wrapper CXX)
+
+include(conan.cmake)
+conan_cmake_run(REQUIRES Hello/0.1@memsharded/testing
+                BASIC_SETUP
+                BUILD missing)
+
+add_executable(main main.cpp)
+target_link_libraries(main ${CONAN_LIBS})
+"""
+        save("CMakeLists.txt", content)
+
+        os.makedirs("build")
+        os.chdir("build")
+        run("cmake .. %s -T v140,host=x64 -DCMAKE_BUILD_TYPE=Release" % (generator))
+        run("cmake --build . --config Release")
+        cmd = os.sep.join([".", "bin", "main"])
+        run(cmd)
+        
+    def test_arch(self):
+        content = """#set(CMAKE_CXX_COMPILER_WORKS 1)
+#set(CMAKE_CXX_ABI_COMPILED 1)
+message(STATUS "COMPILING-------")
+cmake_minimum_required(VERSION 2.8)
+project(conan_wrapper CXX)
+
+include(conan.cmake)
+conan_cmake_run(BASIC_SETUP
+                BUILD missing
+                ARCH armv7)
+
+if(NOT ${CONAN_SETTINGS_ARCH} STREQUAL "armv7")
+    message(FATAL_ERROR "ARCHITECTURE IS NOT armv7")
+endif()
+"""
+        save("CMakeLists.txt", content)
+
+        os.makedirs("build")
+        os.chdir("build")
+        run("cmake .. %s -DCMAKE_BUILD_TYPE=Release" % (generator))
+
+
+    def test_no_output_dir(self):
+        content = """set(CMAKE_CXX_COMPILER_WORKS 1)
+set(CMAKE_CXX_ABI_COMPILED 1)
+message(STATUS "COMPILING-------")
+cmake_minimum_required(VERSION 2.8)
+project(conan_wrapper CXX)
+
+include(conan.cmake)
+conan_cmake_run(BASIC_SETUP
+                NO_OUTPUT_DIRS
+                BUILD missing)
+
+
+if(CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+    message(FATAL_ERROR "OUTPUT_DIRS ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+endif()
+"""
+        save("CMakeLists.txt", content)
+
+        os.makedirs("build")
+        os.chdir("build")
+        run("cmake .. %s -DCMAKE_BUILD_TYPE=Release" % (generator))
+
+    def test_build_type(self):
+        content = """set(CMAKE_CXX_COMPILER_WORKS 1)
+set(CMAKE_CXX_ABI_COMPILED 1)
+message(STATUS "COMPILING-------")
+cmake_minimum_required(VERSION 2.8)
+project(conan_wrapper CXX)
+
+include(conan.cmake)
+conan_cmake_run(BASIC_SETUP
+                BUILD_TYPE None)
+
+if(NOT ${CONAN_SETTINGS_BUILD_TYPE} STREQUAL "None")
+    message(FATAL_ERROR "CMAKE BUILD TYPE is not None!")
+endif()
+"""
+        save("CMakeLists.txt", content)
+
+        os.makedirs("build")
+        os.chdir("build")
+        run("cmake .. %s  -DCMAKE_BUILD_TYPE=Release" % (generator))
+
+    def test_settings(self):
+        content = """set(CMAKE_CXX_COMPILER_WORKS 1)
+set(CMAKE_CXX_ABI_COMPILED 1)
+message(STATUS "COMPILING-------")
+cmake_minimum_required(VERSION 2.8)
+project(conan_wrapper CXX)
+
+include(conan.cmake)
+conan_cmake_run(BASIC_SETUP
+                SETTINGS arch=armv6
+                SETTINGS cppstd=14)
+
+if(NOT ${CONAN_SETTINGS_ARCH} STREQUAL "armv6")
+    message(FATAL_ERROR "CONAN_SETTINGS_ARCH INCORRECT!")
+endif()
+if(NOT ${CONAN_SETTINGS_CPPSTD} STREQUAL "14")
+    message(FATAL_ERROR "CONAN_SETTINGS_CPPSTD INCORRECT!")
+endif()
+"""
+        save("CMakeLists.txt", content)
+
+        os.makedirs("build")
+        os.chdir("build")
+        run("cmake .. %s  -DCMAKE_BUILD_TYPE=Release" % (generator))
+
+    def test_profile_auto(self):
+        content = """cmake_minimum_required(VERSION 2.8)
+project(conan_wrapper CXX)
+
+set(CONAN_DISABLE_CHECK_COMPILER ON)
+include(conan.cmake)
+conan_cmake_run(BASIC_SETUP
+                PROFILE myprofile
+                PROFILE_AUTO build_type
+                PROFILE_AUTO compiler
+                )
+
+if(NOT "${CONAN_SETTINGS_BUILD_TYPE}" STREQUAL "${CMAKE_BUILD_TYPE}")
+    message(FATAL_ERROR "CONAN_SETTINGS_BUILD_TYPE INCORRECT!")
+endif()
+if("${CONAN_SETTINGS_COMPILER}" STREQUAL "sun-cc")
+    message(FATAL_ERROR "CONAN_SETTINGS_COMPILER INCORRECT!")
+endif()
+if("${CONAN_SETTINGS_COMPILER_VERSION}" STREQUAL "12")
+    message(FATAL_ERROR "CONAN_SETTINGS_COMPILER_VERSION INCORRECT!")
+endif()
+if("${CONAN_SETTINGS_COMPILER_RUNTIME}" STREQUAL "MTd")
+    message(FATAL_ERROR "CONAN_SETTINGS_COMPILER_RUNTIME INCORRECT!")
+endif()
+"""
+        save("build/myprofile", """[settings]
+build_type=RelWithDebInfo
+compiler=sun-cc
+compiler.version=5.10""")
+        save("CMakeLists.txt", content)
+
+        os.chdir("build")
+        run("cmake .. %s  -DCMAKE_BUILD_TYPE=Release" % (generator))
+        run("cmake .. %s  -DCMAKE_BUILD_TYPE=Debug" % (generator))
+
+        save("build/myprofile", """[settings]
+build_type=RelWithDebInfo
+compiler=Visual Studio
+compiler.version=12
+compiler.runtime=MTd""")
+        save("CMakeLists.txt", content)
+
+        os.chdir("build")
+        run("cmake .. %s  -DCMAKE_BUILD_TYPE=Release" % (generator))
+        run("cmake .. %s  -DCMAKE_BUILD_TYPE=Debug" % (generator))
+
+    def test_profile_auto_all(self):
+        content = """cmake_minimum_required(VERSION 2.8)
+project(conan_wrapper CXX)
+
+set(CONAN_DISABLE_CHECK_COMPILER ON)
+include(conan.cmake)
+conan_cmake_run(BASIC_SETUP
+                PROFILE myprofile
+                PROFILE_AUTO ALL)
+
+if("${CONAN_SETTINGS_BUILD_TYPE}" STREQUAL "RelWithDebInfo")
+    message(FATAL_ERROR "CONAN_SETTINGS_BUILD_TYPE INCORRECT!")
+endif()
+if("${CONAN_SETTINGS_COMPILER}" STREQUAL "sun-cc")
+    message(FATAL_ERROR "CONAN_SETTINGS_COMPILER INCORRECT!")
+endif()
+if("${CONAN_SETTINGS_COMPILER_VERSION}" STREQUAL "12")
+    message(FATAL_ERROR "CONAN_SETTINGS_COMPILER_VERSION INCORRECT!")
+endif()
+if("${CONAN_SETTINGS_COMPILER_RUNTIME}" STREQUAL "MTd")
+    message(FATAL_ERROR "CONAN_SETTINGS_COMPILER_RUNTIME INCORRECT!")
+endif()
+"""
+        save("build/myprofile", """[settings]
+build_type=RelWithDebInfo
+compiler=sun-cc
+compiler.version=5.10""")
+        save("CMakeLists.txt", content)
+
+        os.chdir("build")
+        run("cmake .. %s  -DCMAKE_BUILD_TYPE=Release" % (generator))
+        run("cmake .. %s  -DCMAKE_BUILD_TYPE=Debug" % (generator))
+
+        save("build/myprofile", """[settings]
+build_type=RelWithDebInfo
+compiler=Visual Studio
+compiler.version=12
+compiler.runtime=MTd""")
+        save("CMakeLists.txt", content)
+
+        os.chdir("build")
+        run("cmake .. %s  -DCMAKE_BUILD_TYPE=Release" % (generator))
+        run("cmake .. %s  -DCMAKE_BUILD_TYPE=Debug" % (generator))
